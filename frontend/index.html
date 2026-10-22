@@ -1,0 +1,220 @@
+const apiBase = "/api";
+
+const claimInput = document.getElementById("claimInput");
+const regionSelect = document.getElementById("regionSelect");
+const imageInput = document.getElementById("imageInput");
+const form = document.getElementById("verifyForm");
+const resultPanel = document.getElementById("resultPanel");
+const statusBadge = document.getElementById("statusBadge");
+const confidenceValue = document.getElementById("confidenceValue");
+const claimSummary = document.getElementById("claimSummary");
+const explanationText = document.getElementById("explanationText");
+const evidenceList = document.getElementById("evidenceList");
+const sourcesList = document.getElementById("sourcesList");
+const warningsList = document.getElementById("warningsList");
+const sampleList = document.getElementById("sampleList");
+const shareBtn = document.getElementById("shareBtn");
+const copyBtn = document.getElementById("copyBtn");
+
+async function loadSamples() {
+  const res = await fetch(`${apiBase}/test-data`);
+  const data = await res.json();
+  sampleList.innerHTML = "";
+  data.examples.forEach((example) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sample-button";
+    btn.textContent = example;
+    btn.addEventListener("click", () => {
+      claimInput.value = example;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    sampleList.appendChild(btn);
+  });
+}
+
+function setStatus(status) {
+  statusBadge.textContent = status;
+  const map = {
+    "Likely True": "#10b981",
+    "Likely False": "#ef4444",
+    "Misleading": "#f59e0b",
+    Unverified: "#64748b",
+  };
+  statusBadge.style.background = map[status] || "#64748b";
+}
+
+function renderEvidence(items, sourceName = "Evidence") {
+  if (!items || items.length === 0) {
+    return `<li class="empty-state">No ${sourceName.toLowerCase()} entries were found.</li>`;
+  }
+
+  return items
+    .map((item) => {
+      const title = item.title || item.source || "Source";
+      const summary = item.summary || item.explanation || "";
+      const url = item.url || "#";
+      const published = item.published ? ` · ${item.published}` : "";
+      const support = item.support || "neutral";
+      return `
+        <li class="evidence-item">
+          <div class="tag ${support}">${support}</div>
+          <strong>${title}</strong>
+          <div class="meta">${item.source || "Source"}${published}</div>
+          <p>${summary}</p>
+          <a href="${url}" target="_blank" rel="noreferrer">Open source</a>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function renderSources(items) {
+  if (!items || items.length === 0) {
+    return "<li class='empty-state'>No source links were recorded.</li>";
+  }
+
+  return items
+    .map((item) => `
+      <li><a href="${item.url}" target="_blank" rel="noreferrer">${item.source}</a></li>
+    `)
+    .join("");
+}
+
+function renderWarnings(items) {
+  if (!items || items.length === 0) {
+    return "<li class='empty-state'>No warnings.</li>";
+  }
+
+  return items.map((item) => `<li>${item}</li>`).join("");
+}
+
+function showResult(result) {
+  resultPanel.hidden = false;
+  setStatus(result.status);
+  confidenceValue.textContent = `${result.confidence * 100}%`;
+  claimSummary.textContent = result.claim || "No claim provided";
+  explanationText.textContent = result.explanation || "No explanation available.";
+  evidenceList.innerHTML = `
+    <h3>Supporting evidence</h3>
+    <ul>${renderEvidence(result.supporting_evidence, "supporting")}</ul>
+    <h3>Contradictory evidence</h3>
+    <ul>${renderEvidence(result.contradictory_evidence, "contradictory")}</ul>
+  `;
+  sourcesList.innerHTML = renderSources(result.source_links || []);
+  warningsList.innerHTML = renderWarnings(result.warnings || []);
+
+  const summary = `UNMAI verdict: ${result.status} (${(result.confidence * 100).toFixed(0)}% confidence)\nClaim: ${result.claim}\nExplanation: ${result.explanation}`;
+  copyBtn.dataset.summary = summary;
+  shareBtn.dataset.summary = summary;
+}
+
+async function submitText() {
+  const claim = claimInput.value.trim();
+  if (!claim) {
+    alert("Please enter a claim or paste a message to verify.");
+    return;
+  }
+
+  const res = await fetch(`${apiBase}/verify/text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ claim, region: regionSelect.value }),
+  });
+
+  const result = await res.json();
+  showResult(result);
+
+  const saveRes = await fetch(`${apiBase}/results`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ result }),
+  });
+  const saveData = await saveRes.json();
+  if (saveRes.ok) {
+    shareBtn.dataset.resultId = saveData.result_id;
+  }
+}
+
+async function submitImage() {
+  const file = imageInput.files[0];
+  if (!file) {
+    alert("Please choose a JPG, PNG, or WebP image to upload.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("region", regionSelect.value);
+
+  const res = await fetch(`${apiBase}/verify/image`, {
+    method: "POST",
+    body: formData,
+  });
+
+  const result = await res.json();
+  if (!res.ok) {
+    alert(result.detail || "Unable to verify the image.");
+    return;
+  }
+
+  showResult(result);
+
+  const saveRes = await fetch(`${apiBase}/results`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ result }),
+  });
+  const saveData = await saveRes.json();
+  if (saveRes.ok) {
+    shareBtn.dataset.resultId = saveData.result_id;
+  }
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const file = imageInput.files[0];
+  if (file) {
+    await submitImage();
+  } else {
+    await submitText();
+  }
+});
+
+copyBtn.addEventListener("click", async () => {
+  const summary = copyBtn.dataset.summary || "UNMAI check";
+  await navigator.clipboard.writeText(summary);
+  copyBtn.textContent = "Copied";
+  setTimeout(() => {
+    copyBtn.textContent = "Copy summary";
+  }, 1200);
+});
+
+shareBtn.addEventListener("click", async () => {
+  const summary = shareBtn.dataset.summary || "UNMAI check";
+  const resultId = shareBtn.dataset.resultId;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: "UNMAI result",
+        text: summary,
+        url: resultId ? `${window.location.origin}/results/${resultId}` : undefined,
+      });
+      return;
+    } catch (error) {
+      console.warn("Share cancelled or unsupported.", error);
+    }
+  }
+
+  if (resultId) {
+    const link = `${window.location.origin}/results/${resultId}`;
+    window.open(link, "_blank");
+  } else {
+    await navigator.clipboard.writeText(summary);
+    alert("Summary copied to clipboard. Share it manually.");
+  }
+});
+
+loadSamples();
+resultPanel.hidden = true;
